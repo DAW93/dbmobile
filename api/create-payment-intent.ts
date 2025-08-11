@@ -1,6 +1,6 @@
 import Stripe from 'stripe';
 
-// Use your account's default API version (no explicit apiVersion to avoid TS literal mismatches)
+// Use default API version (avoid TS literal mismatches)
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string);
 
 export default async function handler(req: any, res: any) {
@@ -22,7 +22,7 @@ export default async function handler(req: any, res: any) {
       amount,
       currency,
       description,
-      receipt_email, // optional; used in Option 2 for email receipts
+      receipt_email, // <-- this triggers Stripe to email a receipt
       automatic_payment_methods: { enabled: true },
     });
 

@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { useAppContext } from '../hooks/useAppContext';
 import { Bundle, Page, Binder } from '../types';
@@ -8,7 +7,7 @@ import { Lock } from 'lucide-react';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements, CardElement, useStripe, useElements } from '@stripe/react-stripe-js';
 
-// Get publishable key from .env
+// Read publishable key from Vite .env (VITE_STRIPE_PUBLISHABLE_KEY=...)
 const STRIPE_PUBLISHABLE_KEY = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY!;
 const stripePromise = loadStripe(STRIPE_PUBLISHABLE_KEY);
 
@@ -21,6 +20,7 @@ const CheckoutForm: React.FC<{
   const elements = useElements();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [email, setEmail] = useState('');
 
   const handlePay = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,11 +30,14 @@ const CheckoutForm: React.FC<{
     setError(null);
 
     try {
-      // Call backend function to create PaymentIntent
+      // 1) Create a PaymentIntent (include receipt_email so Stripe emails a receipt)
       const res = await fetch('/api/create-payment-intent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount: bundle.price * 100 }) // cents
+        body: JSON.stringify({
+          amount: Math.round(bundle.price * 100), // cents, integer
+          receipt_email: email || undefined
+        })
       });
 
       if (!res.ok) {
@@ -45,11 +48,15 @@ const CheckoutForm: React.FC<{
       const { clientSecret } = await res.json();
       if (!clientSecret) throw new Error('Missing clientSecret from server.');
 
+      // 2) Confirm the card payment in the browser
       const cardElement = elements.getElement(CardElement);
       if (!cardElement) return;
 
       const { error: stripeError, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
-        payment_method: { card: cardElement },
+        payment_method: {
+          card: cardElement,
+          billing_details: email ? { email } : undefined,
+        }
       });
 
       if (stripeError) {
@@ -94,6 +101,17 @@ const CheckoutForm: React.FC<{
           <p className="text-2xl font-bold text-white">${bundle.price.toFixed(2)}</p>
         </div>
         <form onSubmit={handlePay} className="space-y-4">
+          <div>
+            <label className="text-sm font-medium text-gray-300 block mb-2">Email (for receipt)</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e)=>setEmail(e.target.value)}
+              placeholder="you@example.com"
+              required
+              className="w-full p-3 bg-gray-700 border border-gray-600 rounded-md text-white"
+            />
+          </div>
           <div>
             <label className="text-sm font-medium text-gray-300 block mb-2">Card Information</label>
             <div className="p-3 bg-gray-700 border border-gray-600 rounded-md">
