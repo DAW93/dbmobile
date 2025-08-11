@@ -1,63 +1,54 @@
 import Stripe from 'stripe';
-import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
-  apiVersion: '2024-06-20',
-});
+// No explicit apiVersion — rely on account default to avoid TS literal mismatch
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string);
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+/**
+ * Expected JSON body:
+ * {
+ *   name: string,
+ *   description?: string,
+ *   price: number,         // cents (integer)
+ *   currency?: string,     // default 'usd'
+ *   productId?: string,    // optional, if you track it
+ *   priceId?: string       // optional, if you track it
+ * }
+ */
+export default async function handler(req: any, res: any) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const { name, description, price, currency, productId, priceId } = req.body;
+    const {
+      name,
+      description = '',
+      price,
+      currency = 'usd',
+      productId,
+      // priceId is ignored here; we always create a new price (Stripe prices are immutable for amount)
+    } = req.body || {};
 
-    if (!name || !price || !currency) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    if (!name || !Number.isInteger(price) || price <= 0) {
+      return res.status(400).json({ error: 'Provide valid name and integer price (cents).' });
     }
 
-    let product;
+    // Create or update the product
+    const product = productId
+      ? await stripe.products.update(productId, { name, description })
+      : await stripe.products.create({ name, description });
 
-    if (productId) {
-      // Update existing product
-      product = await stripe.products.update(productId, {
-        name,
-        description,
-      });
-    } else {
-      // Create new product
-      product = await stripe.products.create({
-        name,
-        description,
-      });
-    }
-
-    let newPrice;
-
-    if (priceId) {
-      // Create a new price if amount changed
-      newPrice = await stripe.prices.create({
-        unit_amount: price,
-        currency,
-        product: product.id,
-      });
-    } else {
-      // First time creating price
-      newPrice = await stripe.prices.create({
-        unit_amount: price,
-        currency,
-        product: product.id,
-      });
-    }
+    // Always create a new price for the current amount/currency
+    const newPrice = await stripe.prices.create({
+      product: product.id,
+      unit_amount: price,
+      currency,
+    });
 
     return res.status(200).json({
       stripeProductId: product.id,
       stripePriceId: newPrice.id,
     });
-
   } catch (err: any) {
-    console.error('Stripe sync error:', err);
+    console.error('[sync-stripe-product] error:', err);
     return res.status(500).json({ error: err.message || 'Internal server error' });
   }
 }
