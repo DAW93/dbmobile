@@ -6,6 +6,7 @@ import { Page, ReminderFrequency, Binder } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 import Modal from './shared/Modal';
 import { ChevronsLeft, ChevronsRight } from 'lucide-react';
+import { canPublish } from '../utils/roles';
 
 const BinderCard: React.FC<{ binder: Binder; onSelect: (id: string) => void }> = ({ binder, onSelect }) => (
   <div 
@@ -32,7 +33,7 @@ const BindersView: React.FC = () => {
   const { binders, selectedBinderId, user } = state;
   const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
 
-  // NEW: collapse state for the per-binder "pages" panel (the left pane in this view)
+  // collapse state for the per-binder "pages" panel
   const [tocCollapsed, setTocCollapsed] = useState(false);
 
   const selectedBinder = binders.find(b => b.id === selectedBinderId);
@@ -42,7 +43,7 @@ const BindersView: React.FC = () => {
   const [bundlePrice, setBundlePrice] = useState(9.99);
   const [bundleImg, setBundleImg] = useState('');
 
-  // State for inline editing binder name
+  // inline editing binder name
   const [isEditingName, setIsEditingName] = useState(false);
   const [currentName, setCurrentName] = useState('');
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -125,7 +126,7 @@ const BindersView: React.FC = () => {
     setIsPublishModalOpen(false);
   };
 
-  // === STRIPE PRODUCT SYNC (kept) ===
+  // === STRIPE PRODUCT SYNC ===
   const handlePublishBinder = async () => {
     if (!selectedBinder) return;
 
@@ -244,7 +245,7 @@ const BindersView: React.FC = () => {
                 </h2>
               )}
               <div className="flex items-center space-x-2">
-                {user.role === 'owner' && (
+                {canPublish(user) && (
                   <button onClick={() => setIsPublishModalOpen(true)} title={isPublished ? "Manage Listing" : "Publish to Shop"} className="text-gray-400 hover:text-white transition-colors duration-200">
                       {ICONS.upload}
                   </button>
@@ -298,7 +299,7 @@ const BindersView: React.FC = () => {
         )}
       </div>
 
-      {/* Page Detail — now gets more space when pages panel is collapsed */}
+      {/* Page Detail */}
       <div className="flex-1">
         <PageDetail />
       </div>
