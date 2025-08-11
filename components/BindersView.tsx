@@ -5,7 +5,6 @@ import { ICONS } from '../constants';
 import { Page, ReminderFrequency, Binder } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 import Modal from './shared/Modal';
-import { ChevronsLeft, ChevronsRight } from 'lucide-react';
 
 const BinderCard: React.FC<{ binder: Binder; onSelect: (id: string) => void }> = ({ binder, onSelect }) => (
   <div 
@@ -31,7 +30,6 @@ const BindersView: React.FC = () => {
   const { state, dispatch } = useAppContext();
   const { binders, selectedBinderId, user } = state;
   const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
-  const [isCollapsed, setIsCollapsed] = useState(false);
 
   const selectedBinder = binders.find(b => b.id === selectedBinderId);
   
@@ -123,16 +121,17 @@ const BindersView: React.FC = () => {
     setIsPublishModalOpen(false);
   };
 
-  // === PUBLISH/SYNC TO STRIPE (kept from deployed integration) ===
+  // === STRIPE PRODUCT SYNC (kept) ===
   const handlePublishBinder = async () => {
     if (!selectedBinder) return;
 
     const binderDataForStripe = {
       name: bundleName,
       description: bundleDesc || '',
-      price: Math.round(Number(bundlePrice) * 100), // cents
+      price: Math.round(Number(bundlePrice) * 100), // Stripe wants cents (integer)
       imageUrl: bundleImg || `https://picsum.photos/seed/${bundleName.replace(/\s+/g, '-').toLowerCase()}/400/300`,
       bundleId: selectedBinder.bundleId || `bundle_${uuidv4()}`,
+      // We only track stripePriceId in Binder type; pass it if present so backend can reuse price if unchanged
       priceId: selectedBinder.stripePriceId || undefined,
       currency: 'usd',
     };
@@ -159,7 +158,7 @@ const BindersView: React.FC = () => {
         imageUrl: binderDataForStripe.imageUrl,
         isPublished: true,
         bundleId: binderDataForStripe.bundleId,
-        stripePriceId: stripePriceId,
+        stripePriceId: stripePriceId, // save price id returned from server
       };
       
       dispatch({ type: 'UPDATE_BINDER', payload: updatedBinder });
@@ -195,16 +194,7 @@ const BindersView: React.FC = () => {
   if (!selectedBinder) {
     return (
       <div className="p-4 sm:p-6 md:p-8 animate-fade-in">
-        <div className="flex items-center justify-between mb-2">
-          <h1 className="text-3xl font-bold text-white">My Binders</h1>
-          <button
-            onClick={() => setIsCollapsed((c) => !c)}
-            className="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-md text-gray-200 text-sm"
-            title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            {isCollapsed ? <ChevronsRight size={18}/> : <ChevronsLeft size={18}/>}
-          </button>
-        </div>
+        <h1 className="text-3xl font-bold text-white mb-2">My Binders</h1>
         <p className="text-gray-400 mb-8">Select a binder to view its contents.</p>
         
         {binders.length > 0 ? (
@@ -227,87 +217,56 @@ const BindersView: React.FC = () => {
 
   return (
     <div className="flex h-full">
-      {/* Collapsible Sidebar */}
-      <div className={`${isCollapsed ? 'w-16' : 'w-80'} transition-all duration-200 bg-gray-900/50 border-r border-gray-700 flex flex-col`}>
-        <div className="p-4 border-b border-gray-700 flex items-center justify-between">
-          <div className="flex items-center gap-2 min-w-0">
-            {isEditingName && user.role === 'owner' ? (
-              <input
-                ref={nameInputRef}
-                value={currentName}
-                onChange={(e) => setCurrentName(e.target.value)}
-                onBlur={handleNameUpdate}
-                onKeyDown={handleNameInputKeyDown}
-                className="text-lg font-bold text-white bg-transparent border-b-2 border-blue-500 focus:outline-none w-full pr-2"
-              />
-            ) : (
-              <h2
-                onClick={() => user.role === 'owner' && setIsEditingName(true)}
-                className={`text-lg font-bold text-white truncate pr-2 ${user.role === 'owner' ? 'cursor-pointer hover:text-blue-300 transition-colors' : ''}`}
-                title={user.role === 'owner' ? "Click to edit binder name" : selectedBinder.name}
-              >
-                {!isCollapsed ? selectedBinder.name : '…'}
-              </h2>
-            )}
-          </div>
-          <button
-            onClick={() => setIsCollapsed((c) => !c)}
-            className="text-gray-400 hover:text-white transition-colors duration-200"
-            title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            {isCollapsed ? <ChevronsRight size={18}/> : <ChevronsLeft size={18}/>}
-          </button>
-        </div>
-
-        <div className="p-2 flex-1 overflow-y-auto">
-          {!isCollapsed ? (
-            <>
-              <div className="flex items-center space-x-2 mb-2">
-                {user.role === 'owner' && (
-                  <button onClick={() => setIsPublishModalOpen(true)} title={isPublished ? "Manage Listing" : "Publish to Shop"} className="text-gray-400 hover:text-white transition-colors duration-200">
-                      {ICONS.upload}
-                  </button>
-                )}
-                <button onClick={handleAddPage} className="text-gray-400 hover:text-white transition-colors duration-200">
-                    {ICONS.add}
-                </button>
-                <button onClick={handleDeleteBinder} className="text-gray-400 hover:text-red-500 transition-colors duration-200">
-                    {ICONS.delete}
-                </button>
-              </div>
-
-              {selectedBinder.pages.map(page => (
-                <button
-                  key={page.id}
-                  onClick={() => dispatch({ type: 'SELECT_PAGE', payload: { binderId: selectedBinder.id, pageId: page.id } })}
-                  className={`flex items-center w-full text-left p-3 rounded-lg text-sm transition-colors duration-200 ${
-                    state.selectedPageId === page.id ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700'
-                  }`}
-                >
-                  {ICONS.page}
-                  <span className="ml-3 truncate">{page.title}</span>
-                </button>
-              ))}
-              {selectedBinder.pages.length === 0 && (
-                  <div className="text-center text-gray-500 p-4">No pages in this binder.</div>
-              )}
-            </>
+      {/* Table of Contents (static width, no collapse here) */}
+      <div className="w-80 bg-gray-900/50 border-r border-gray-700 flex flex-col">
+        <div className="p-4 border-b border-gray-700 flex justify-between items-center">
+          {isEditingName && user.role === 'owner' ? (
+            <input
+              ref={nameInputRef}
+              value={currentName}
+              onChange={(e) => setCurrentName(e.target.value)}
+              onBlur={handleNameUpdate}
+              onKeyDown={handleNameInputKeyDown}
+              className="text-lg font-bold text-white bg-transparent border-b-2 border-blue-500 focus:outline-none w-full pr-2"
+            />
           ) : (
-            // Collapsed: show just icons for quick actions
-            <div className="flex flex-col items-center gap-4">
-              {user.role === 'owner' && (
-                <button onClick={() => setIsPublishModalOpen(true)} title={isPublished ? "Manage Listing" : "Publish to Shop"} className="text-gray-400 hover:text-white transition-colors duration-200">
-                    {ICONS.upload}
-                </button>
-              )}
-              <button onClick={handleAddPage} className="text-gray-400 hover:text-white transition-colors duration-200" title="Add Page">
-                  {ICONS.add}
+            <h2
+              onClick={() => user.role === 'owner' && setIsEditingName(true)}
+              className={`text-lg font-bold text-white truncate pr-2 ${user.role === 'owner' ? 'cursor-pointer hover:text-blue-300 transition-colors' : ''}`}
+              title={user.role === 'owner' ? "Click to edit binder name" : selectedBinder.name}
+            >
+              {selectedBinder.name}
+            </h2>
+          )}
+          <div className="flex items-center space-x-2">
+            {user.role === 'owner' && (
+              <button onClick={() => setIsPublishModalOpen(true)} title={isPublished ? "Manage Listing" : "Publish to Shop"} className="text-gray-400 hover:text-white transition-colors duration-200">
+                  {ICONS.upload}
               </button>
-              <button onClick={handleDeleteBinder} className="text-gray-400 hover:text-red-500 transition-colors duration-200" title="Delete Binder">
-                  {ICONS.delete}
-              </button>
-            </div>
+            )}
+            <button onClick={handleAddPage} className="text-gray-400 hover:text-white transition-colors duration-200">
+                {ICONS.add}
+            </button>
+            <button onClick={handleDeleteBinder} className="text-gray-400 hover:text-red-500 transition-colors duration-200">
+                {ICONS.delete}
+            </button>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto p-2">
+          {selectedBinder.pages.map(page => (
+            <button
+              key={page.id}
+              onClick={() => dispatch({ type: 'SELECT_PAGE', payload: { binderId: selectedBinder.id, pageId: page.id } })}
+              className={`flex items-center w-full text-left p-3 rounded-lg text-sm transition-colors duration-200 ${
+                state.selectedPageId === page.id ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700'
+              }`}
+            >
+              {ICONS.page}
+              <span className="ml-3 truncate">{page.title}</span>
+            </button>
+          ))}
+          {selectedBinder.pages.length === 0 && (
+              <div className="text-center text-gray-500 p-4">No pages in this binder.</div>
           )}
         </div>
       </div>
