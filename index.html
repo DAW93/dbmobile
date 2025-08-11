@@ -1,0 +1,62 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Digital Binder Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              'gray-900': '#121212',
+              'gray-800': '#1e1e1e',
+              'gray-700': '#2d2d2d',
+              'gray-600': '#444444',
+              'gray-500': '#666666',
+              'gray-400': '#999999',
+              'gray-300': '#cccccc',
+              'gray-200': '#e0e0e0',
+              'gray-100': '#f5f5f5',
+              'blue-500': '#3b82f6',
+              'blue-600': '#2563eb',
+              'green-500': '#22c55e',
+              'yellow-500': '#eab308',
+              'red-500': '#ef4444',
+              'purple-500': '#8b5cf6',
+            },
+            keyframes: {
+              'fade-in': {
+                '0%': { opacity: '0', transform: 'translateY(-10px)' },
+                '100%': { opacity: '1', transform: 'translateY(0)' },
+              }
+            },
+            animation: {
+              'fade-in': 'fade-in 0.3s ease-out forwards',
+            }
+          }
+        }
+      }
+    </script>
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.1.1",
+    "react/": "https://esm.sh/react@^19.1.1/",
+    "react-dom/": "https://esm.sh/react-dom@^19.1.1/",
+    "lucide-react": "https://esm.sh/lucide-react@^0.539.0",
+    "uuid": "https://esm.sh/uuid@^11.1.0",
+    "@stripe/stripe-js": "https://esm.sh/@stripe/stripe-js@^4.1.0",
+    "@stripe/react-stripe-js": "https://esm.sh/@stripe/react-stripe-js@^2.8.0"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+<body class="bg-gray-900 text-gray-100">
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "name": "Digital Binder Pro Mobile App",
+  "description": "A digital binder application to organize notes, tasks, and files securely. It features a smart assistant powered by Gemini to help with content creation and summarization.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "prompt": ""
+}
