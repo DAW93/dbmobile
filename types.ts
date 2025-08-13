@@ -1,4 +1,3 @@
-
 export enum View {
   DASHBOARD = 'DASHBOARD',
   BINDERS = 'BINDERS',
@@ -30,12 +29,21 @@ export enum NotificationStyle {
   CALL = 'Call',
 }
 
+export enum UserRole {
+  OWNER = 'owner',
+  FREE = 'free',
+  VIP = 'vip',
+  CORPORATE_ADMIN = 'corporate_admin',
+  CORPORATE_USER = 'corporate_user',
+}
+
 export interface User {
   id: string;
   email: string;
   name: string;
   password?: string; // Made optional for mock data, but required for new users
-  role: 'owner' | 'user';
+  role: UserRole;
+  corporateId?: string; // For linking corporate users to their organization
 }
 
 export interface Device {
@@ -93,6 +101,7 @@ export interface Page {
 
 export interface Binder {
   id: string;
+  ownerId: string;
   name: string;
   description: string;
   pages: Page[];
@@ -101,16 +110,29 @@ export interface Binder {
   price?: number;
   imageUrl?: string;
   stripePriceId?: string;
+  assignedUsers?: string[];
 }
 
 export interface Bundle {
   bundleId: string;
+  ownerId: string;
   name: string;
   description: string;
   price: number;
   imageUrl: string;
   presetPages: Omit<Page, 'id'>[];
   stripePriceId?: string;
+}
+
+export interface SubscriptionPlan {
+  id: UserRole;
+  name: string;
+  description: string;
+  price: number; // per month
+  priceYearly: number; // per year
+  features: string[];
+  stripePriceId?: string;
+  stripePriceIdYearly?: string;
 }
 
 export interface ActiveNotification {
@@ -124,10 +146,13 @@ export interface ActiveNotification {
 
 export interface AppState {
   user: User | null;
+  users: User[];
   isAuthenticated: boolean;
   devices: Device[];
   binders: Binder[];
+  originalBinders?: Binder[] | null;
   bundles: Bundle[];
+  subscriptionPlans: SubscriptionPlan[];
   purchasedBundles: string[];
   currentView: View;
   selectedBinderId: string | null;
@@ -135,6 +160,9 @@ export interface AppState {
   isNewPageModalOpen: boolean;
   notificationStyle: NotificationStyle;
   activeNotification: ActiveNotification | null;
+  isSidebarCollapsed: boolean;
+  pushSubscription: PushSubscription | null;
+  simulatedRole?: UserRole | null;
 }
 
 export type AppAction =
@@ -153,7 +181,15 @@ export type AppAction =
   | { type: 'PURCHASE_BUNDLE'; payload: string }
   | { type: 'ADD_BUNDLE'; payload: Bundle }
   | { type: 'SET_NEW_PAGE_MODAL_OPEN', payload: boolean }
-  | { type: 'SET_USER_ROLE'; payload: 'owner' | 'user' }
+  | { type: 'SET_SIMULATED_ROLE'; payload: UserRole | null }
   | { type: 'SET_NOTIFICATION_STYLE'; payload: NotificationStyle }
   | { type: 'TRIGGER_NOTIFICATION'; payload: ActiveNotification }
-  | { type: 'DISMISS_NOTIFICATION' };
+  | { type: 'DISMISS_NOTIFICATION' }
+  | { type: 'TOGGLE_SIDEBAR' }
+  | { type: 'SET_PUSH_SUBSCRIPTION'; payload: PushSubscription | null }
+  | { type: 'UPDATE_SUBSCRIPTION_PLAN'; payload: SubscriptionPlan }
+  | { type: 'SET_USERS'; payload: User[] }
+  | { type: 'DELETE_USER'; payload: string }
+  | { type: 'UPGRADE_SUBSCRIPTION'; payload: UserRole }
+  | { type: 'ASSIGN_BINDER'; payload: { binderId: string; userIds: string[] } }
+  | { type: 'CREATE_CORPORATE_USER'; payload: Omit<User, 'id' | 'role' | 'corporateId'> };

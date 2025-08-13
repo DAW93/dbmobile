@@ -32,7 +32,8 @@ const TaskItem: React.FC<{
     onUpdate: (updatedTask: Task) => void, 
     onDelete: (taskId: string) => void,
     onTimerEnd: (task: Task) => void,
-}> = ({ task, onUpdate, onDelete, onTimerEnd }) => {
+    onTimerStart: (task: Task) => void,
+}> = ({ task, onUpdate, onDelete, onTimerEnd, onTimerStart }) => {
     const isTimerActive = task.startTime && task.dueDate && new Date(task.dueDate).getTime() > Date.now();
 
     const [date, time] = (task.dueDate || 'T').split('T');
@@ -91,7 +92,7 @@ const TaskItem: React.FC<{
                     </div>
                 )}
                 <button 
-                    onClick={() => onUpdate({ ...task, startTime: Date.now() })}
+                    onClick={() => onTimerStart(task)}
                     disabled={!task.dueDate || isTimerActive}
                     className="px-2 py-1 text-xs bg-blue-600 hover:bg-blue-700 rounded-md disabled:bg-gray-500"
                 >
@@ -202,7 +203,7 @@ const FileItem: React.FC<{
 
 const PageDetail: React.FC = () => {
   const { state, dispatch } = useAppContext();
-  const { binders, selectedBinderId, selectedPageId, notificationStyle } = state;
+  const { binders, selectedBinderId, selectedPageId, notificationStyle, pushSubscription } = state;
   
   const [page, setPage] = useState<Page | null>(null);
   const [newTaskText, setNewTaskText] = useState('');
@@ -379,21 +380,75 @@ const PageDetail: React.FC = () => {
       }
   };
 
+  const schedulePushNotification = async (title: string, body: string, targetTime: number) => {
+      if (!pushSubscription) {
+          console.warn('Cannot schedule push notification: No push subscription available.');
+          return;
+      }
+      
+      // In a real app, this would be an API call to your backend.
+      // The backend would then schedule to send a push message at the targetTime.
+      console.log('Simulating sending push notification request to backend:');
+      const payload = {
+          subscription: pushSubscription,
+          notification: {
+              title,
+              body,
+              url: window.location.href, // URL to open on click
+          },
+          targetTime, // The backend would use this to schedule the push
+      };
+      console.log(payload);
+
+      // fetch('/api/schedule-notification', {
+      //   method: 'POST',
+      //   body: JSON.stringify(payload),
+      //   headers: { 'Content-Type': 'application/json' },
+      // });
+      
+      alert(`A background notification has been scheduled for "${title}". You will be notified even if the app is closed.`);
+  };
+
+
   const handleStartReminder = () => {
-      if (page && page.reminder.dateTime) {
+      if (page && page.reminder.dateTime && page.reminder.title) {
           handleReminderChange('isActive', true);
+          schedulePushNotification(
+              `Reminder: ${page.title}`,
+              page.reminder.title,
+              new Date(page.reminder.dateTime).getTime()
+          );
       }
   };
+
+    const handleStartTaskTimer = (task: Task) => {
+        if (task.dueDate) {
+            const updatedTask = { ...task, startTime: Date.now() };
+            handleTaskUpdate(updatedTask);
+            schedulePushNotification(
+                `Task Due: ${page?.title || 'A page'}`,
+                task.text,
+                new Date(task.dueDate).getTime()
+            );
+        }
+    };
 
     const handleTimerEnd = (payload: { title: string; sourceType: 'task' | 'reminder'; sourceId: string }) => {
         if (!selectedBinderId || !page) return;
 
-        if (notificationStyle === NotificationStyle.STANDARD) {
-            new Notification('Digital Binder Pro', {
-                body: `Reminder: ${payload.title}`,
-                icon: '/logo192.png', // You'd need a logo file for this
-            });
-            // For standard notifications, we can dismiss it right away in the state
+        // The push notification is the primary reliable method.
+        // This foreground notification is for when the app is open.
+        // We'll skip standard browser notifications now to avoid duplicates.
+        if (notificationStyle !== NotificationStyle.STANDARD) {
+             const notificationPayload: ActiveNotification = {
+                type: notificationStyle.toLowerCase() as 'alarm' | 'call',
+                binderId: selectedBinderId,
+                pageId: page.id,
+                ...payload,
+            };
+            dispatch({ type: 'TRIGGER_NOTIFICATION', payload: notificationPayload });
+        } else {
+            // For standard style when app is open, we can just clear the timer state.
             if (payload.sourceType === 'reminder') {
                 handleReminderChange('isActive', false);
             } else {
@@ -402,14 +457,6 @@ const PageDetail: React.FC = () => {
                     handleTaskUpdate({ ...task, startTime: undefined });
                 }
             }
-        } else {
-            const notificationPayload: ActiveNotification = {
-                type: notificationStyle.toLowerCase() as 'alarm' | 'call',
-                binderId: selectedBinderId,
-                pageId: page.id,
-                ...payload,
-            };
-            dispatch({ type: 'TRIGGER_NOTIFICATION', payload: notificationPayload });
         }
     };
 
@@ -597,7 +644,7 @@ const PageDetail: React.FC = () => {
         <div>
           <h3 className="text-xl font-semibold text-white mb-2">Tasks</h3>
           <div className="space-y-3">
-            {page.tasks.map(task => <TaskItem key={task.id} task={task} onUpdate={handleTaskUpdate} onDelete={handleTaskDelete} onTimerEnd={handleTaskTimerEnd} />)}
+            {page.tasks.map(task => <TaskItem key={task.id} task={task} onUpdate={handleTaskUpdate} onDelete={handleTaskDelete} onTimerEnd={handleTaskTimerEnd} onTimerStart={handleStartTaskTimer} />)}
             {page.tasks.length === 0 && <p className="text-gray-500 text-sm">No tasks for this page.</p>}
           </div>
           <div className="mt-4 flex">

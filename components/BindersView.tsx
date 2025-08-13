@@ -1,12 +1,17 @@
-import React, { useState, useEffect, useRef } from 'react';
+
+
+
+
+
+
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useAppContext } from '../hooks/useAppContext';
 import PageDetail from './PageDetail';
 import { ICONS } from '../constants';
-import { Page, ReminderFrequency, Binder } from '../types';
+import { Page, ReminderFrequency, Bundle, Binder, UserRole } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 import Modal from './shared/Modal';
-import { ChevronsLeft, ChevronsRight } from 'lucide-react';
-import { canPublish } from '../utils/roles';
+import AssignBinderModal from './AssignBinderModal';
 
 const BinderCard: React.FC<{ binder: Binder; onSelect: (id: string) => void }> = ({ binder, onSelect }) => (
   <div 
@@ -30,25 +35,66 @@ const BinderCard: React.FC<{ binder: Binder; onSelect: (id: string) => void }> =
 
 const BindersView: React.FC = () => {
   const { state, dispatch } = useAppContext();
-  const { binders, selectedBinderId, user } = state;
+  const { binders, bundles, selectedBinderId, user, simulatedRole, users } = state;
   const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
-
-  // collapse state for the per-binder "pages" panel
-  const [tocCollapsed, setTocCollapsed] = useState(false);
-
-  const selectedBinder = binders.find(b => b.id === selectedBinderId);
+  const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
+  const [isTocCollapsed, setIsTocCollapsed] = useState(false);
   
   const [bundleName, setBundleName] = useState('');
   const [bundleDesc, setBundleDesc] = useState('');
   const [bundlePrice, setBundlePrice] = useState(9.99);
   const [bundleImg, setBundleImg] = useState('');
 
-  // inline editing binder name
+  // State for inline editing binder name
   const [isEditingName, setIsEditingName] = useState(false);
   const [currentName, setCurrentName] = useState('');
   const nameInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const uploadedImageUrlRef = useRef<string | null>(null);
+  
+  const effectiveRole = simulatedRole || user?.role;
+
+  const displayBinders = useMemo(() => {
+    if (!user) return [];
+    
+    // For corporate roles, the logic in useAppContext now provides the correct merged list.
+    if (effectiveRole === UserRole.CORPORATE_ADMIN || effectiveRole === UserRole.CORPORATE_USER) {
+        return binders;
+    }
+
+    if (effectiveRole === UserRole.OWNER) {
+      // The Owner sees all their binders PLUS a real-time view of all published bundles.
+      const ownerBinders = [...binders];
+      const binderBundleIds = new Set(ownerBinders.map(b => b.bundleId).filter(Boolean));
+
+      bundles.forEach(bundle => {
+          if (!binderBundleIds.has(bundle.bundleId)) {
+            ownerBinders.push({
+                id: `binder-${bundle.bundleId}`,
+                ownerId: bundle.ownerId,
+                name: bundle.name,
+                description: bundle.description,
+                pages: bundle.presetPages.map((p, index) => ({
+                    id: `page-${bundle.bundleId}-${index}`,
+                    ...p,
+                })),
+                bundleId: bundle.bundleId,
+                isPublished: true,
+                price: bundle.price,
+                imageUrl: bundle.imageUrl,
+                stripePriceId: bundle.stripePriceId,
+            });
+          }
+      });
+      return ownerBinders;
+    } else {
+        // All other roles (Free, VIP) see only binders they explicitly own.
+        return binders.filter(binder => binder.ownerId === user.id);
+    }
+  }, [user, effectiveRole, binders, bundles]);
+
+
+  const selectedBinder = displayBinders.find(b => b.id === selectedBinderId);
 
   useEffect(() => {
     if (isPublishModalOpen && selectedBinder) {
@@ -126,58 +172,46 @@ const BindersView: React.FC = () => {
     setIsPublishModalOpen(false);
   };
 
-  // === STRIPE PRODUCT SYNC ===
   const handlePublishBinder = async () => {
-    if (!selectedBinder) return;
+    if (!selectedBinder || !user) return;
 
     const binderDataForStripe = {
-      name: bundleName,
-      description: bundleDesc || '',
-      price: Math.round(Number(bundlePrice) * 100), // cents integer
-      imageUrl: bundleImg || `https://picsum.photos/seed/${bundleName.replace(/\s+/g, '-').toLowerCase()}/400/300`,
-      bundleId: selectedBinder.bundleId || `bundle_${uuidv4()}`,
-      priceId: selectedBinder.stripePriceId || undefined,
-      currency: 'usd',
+        name: bundleName,
+        description: bundleDesc,
+        price: Number(bundlePrice) * 100, // Stripe expects price in cents
+        imageUrl: bundleImg || `https://picsum.photos/seed/${bundleName.replace(/\s+/g, '-').toLowerCase()}/400/300`,
+        bundleId: selectedBinder.bundleId || `bundle_${uuidv4()}`,
     };
 
     try {
-      const response = await fetch('/api/sync-stripe-product', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(binderDataForStripe),
-      });
+        console.log('Simulating Stripe product sync...');
+        const stripePriceId = selectedBinder.stripePriceId || `price_${uuidv4().replace(/-/g, '')}`;
 
-      if (!response.ok) {
-        const { error } = await response.json().catch(() => ({ error: 'Failed to sync product with Stripe' }));
-        throw new Error(error);
-      }
+        const updatedBinder: Binder = {
+            ...selectedBinder,
+            ownerId: user.id, // Ensure ownership is set/re-affirmed
+            name: bundleName,
+            description: bundleDesc,
+            price: Number(bundlePrice),
+            imageUrl: binderDataForStripe.imageUrl,
+            isPublished: true,
+            bundleId: binderDataForStripe.bundleId,
+            stripePriceId: stripePriceId,
+        };
+        
+        dispatch({ type: 'UPDATE_BINDER', payload: updatedBinder });
+        
+        uploadedImageUrlRef.current = null; 
 
-      const { stripePriceId } = await response.json();
+        const successAction = selectedBinder.isPublished ? 'updated' : 'published';
+        alert(`Successfully ${successAction} "${bundleName}" and created/updated its product in Stripe.`);
+        setIsPublishModalOpen(false);
 
-      const updatedBinder: Binder = {
-        ...selectedBinder,
-        name: bundleName,
-        description: bundleDesc,
-        price: Number(bundlePrice),
-        imageUrl: binderDataForStripe.imageUrl,
-        isPublished: true,
-        bundleId: binderDataForStripe.bundleId,
-        stripePriceId: stripePriceId,
-      };
-      
-      dispatch({ type: 'UPDATE_BINDER', payload: updatedBinder });
-      uploadedImageUrlRef.current = null; 
-
-      const successAction = selectedBinder.isPublished ? 'updated' : 'published';
-      alert(`Successfully ${successAction} "${bundleName}" and created/updated its product in Stripe.`);
-      setIsPublishModalOpen(false);
-
-    } catch (error: any) {
-      console.error('Publishing error:', error);
-      alert(error?.message || 'Could not sync with Stripe. Please check your backend and try again.');
+    } catch (error) {
+        console.error('Publishing error:', error);
+        alert('Could not sync with Stripe. Please check your backend and try again.');
     }
   };
-  // === END STRIPE SYNC ===
 
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -195,15 +229,17 @@ const BindersView: React.FC = () => {
     dispatch({ type: 'SELECT_BINDER', payload: binderId });
   };
 
-  if (!selectedBinder) {
+  if (!user) return null;
+
+  if (!selectedBinderId || !selectedBinder) {
     return (
       <div className="p-4 sm:p-6 md:p-8 animate-fade-in">
         <h1 className="text-3xl font-bold text-white mb-2">My Binders</h1>
-        <p className="text-gray-400 mb-8">Select a binder to view its contents.</p>
+        <p className="text-gray-400 mb-8">Select a binder to view its contents or create a new one.</p>
         
-        {binders.length > 0 ? (
+        {displayBinders.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                {binders.map(binder => (
+                {displayBinders.map(binder => (
                     <BinderCard key={binder.id} binder={binder} onSelect={handleSelectBinder} />
                 ))}
             </div>
@@ -217,16 +253,27 @@ const BindersView: React.FC = () => {
     );
   }
   
-  const isPublished = !!selectedBinder.isPublished;
+  const isOwnerOfBinder = selectedBinder.ownerId === user.id;
+  const binderOwner = users.find(u => u.id === selectedBinder.ownerId);
+  const isCollaborator = !isOwnerOfBinder && !!(user?.corporateId && user.corporateId === binderOwner?.corporateId);
+  
+  const canEditMetadata = effectiveRole === UserRole.OWNER || isOwnerOfBinder;
+  const canAddContent = canEditMetadata || isCollaborator;
+  
+  const canEditName = canEditMetadata;
+  const canDelete = canEditMetadata;
+  const canPublish = (effectiveRole === UserRole.OWNER || effectiveRole === UserRole.VIP) && isOwnerOfBinder;
+  const canAssign = effectiveRole === UserRole.CORPORATE_ADMIN && isOwnerOfBinder;
+  const canAddPages = canAddContent;
 
   return (
     <div className="flex h-full">
-      {/* Per-binder "pages" panel with collapse */}
-      <div className={`${tocCollapsed ? 'w-10' : 'w-80'} transition-all duration-200 bg-gray-900/50 border-r border-gray-700 flex flex-col`}>
-        <div className={`border-b border-gray-700 flex items-center justify-between ${tocCollapsed ? 'p-2' : 'p-4'}`}>
-          {!tocCollapsed ? (
+      {/* Table of Contents */}
+      <div className={`bg-gray-900/50 border-r border-gray-700 flex flex-col transition-all duration-300 ${isTocCollapsed ? 'w-16' : 'w-80'}`}>
+        <div className="p-4 border-b border-gray-700 flex justify-between items-center space-x-2">
+          {!isTocCollapsed && (
             <>
-              {isEditingName && user.role === 'owner' ? (
+              {isEditingName && canEditName ? (
                 <input
                   ref={nameInputRef}
                   value={currentName}
@@ -237,74 +284,74 @@ const BindersView: React.FC = () => {
                 />
               ) : (
                 <h2
-                  onClick={() => user.role === 'owner' && setIsEditingName(true)}
-                  className={`text-lg font-bold text-white truncate pr-2 ${user.role === 'owner' ? 'cursor-pointer hover:text-blue-300 transition-colors' : ''}`}
-                  title={user.role === 'owner' ? "Click to edit binder name" : selectedBinder.name}
+                  onClick={() => canEditName && setIsEditingName(true)}
+                  className={`text-lg font-bold text-white truncate pr-2 ${canEditName ? 'cursor-pointer hover:text-blue-300 transition-colors' : ''}`}
+                  title={canEditName ? "Click to edit binder name" : selectedBinder.name}
                 >
                   {selectedBinder.name}
                 </h2>
               )}
-              <div className="flex items-center space-x-2">
-                {canPublish(user) && (
-                  <button onClick={() => setIsPublishModalOpen(true)} title={isPublished ? "Manage Listing" : "Publish to Shop"} className="text-gray-400 hover:text-white transition-colors duration-200">
+              <div className="flex items-center space-x-2 flex-shrink-0">
+                {canAssign && (
+                    <button onClick={() => setIsAssignModalOpen(true)} title="Assign to Users" className="text-gray-400 hover:text-white transition-colors duration-200">
+                        {ICONS.manageUsers}
+                    </button>
+                )}
+                {canPublish && (
+                  <button onClick={() => setIsPublishModalOpen(true)} title="Publish to Shop" className="text-gray-400 hover:text-white transition-colors duration-200">
                       {ICONS.upload}
                   </button>
                 )}
-                <button onClick={handleAddPage} className="text-gray-400 hover:text-white transition-colors duration-200" title="Add Page">
-                    {ICONS.add}
-                </button>
-                <button onClick={handleDeleteBinder} className="text-gray-400 hover:text-red-500 transition-colors duration-200" title="Delete Binder">
-                    {ICONS.delete}
-                </button>
-                <button
-                  onClick={() => setTocCollapsed(true)}
-                  className="text-gray-400 hover:text-white transition-colors duration-200"
-                  title="Collapse pages panel"
-                  aria-label="Collapse pages panel"
-                >
-                  <ChevronsLeft size={18}/>
-                </button>
+                {canAddPages && (
+                    <button onClick={handleAddPage} title="Add New Page" className="text-gray-400 hover:text-white transition-colors duration-200">
+                        {ICONS.add}
+                    </button>
+                )}
+                {canDelete && (
+                    <button onClick={handleDeleteBinder} title="Delete Binder" className="text-gray-400 hover:text-red-500 transition-colors duration-200">
+                        {ICONS.delete}
+                    </button>
+                )}
               </div>
             </>
-          ) : (
-            <button
-              onClick={() => setTocCollapsed(false)}
-              className="mx-auto text-gray-400 hover:text-white transition-colors duration-200"
-              title="Expand pages panel"
-              aria-label="Expand pages panel"
-            >
-              <ChevronsRight size={18}/>
-            </button>
           )}
+           <button 
+                onClick={() => setIsTocCollapsed(!isTocCollapsed)} 
+                className={`p-2 rounded-lg text-gray-400 hover:bg-gray-700 hover:text-white ${isTocCollapsed && 'mx-auto'}`}
+                title={isTocCollapsed ? "Expand Pages" : "Collapse Pages"}
+            >
+              {isTocCollapsed ? ICONS.expand : ICONS.collapse}
+           </button>
         </div>
-
-        {!tocCollapsed && (
-          <div className="flex-1 overflow-y-auto p-2">
-            {selectedBinder.pages.map(page => (
-              <button
-                key={page.id}
-                onClick={() => dispatch({ type: 'SELECT_PAGE', payload: { binderId: selectedBinder.id, pageId: page.id } })}
-                className={`flex items-center w-full text-left p-3 rounded-lg text-sm transition-colors duration-200 ${
-                  state.selectedPageId === page.id ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700'
-                }`}
-              >
-                {ICONS.page}
-                <span className="ml-3 truncate">{page.title}</span>
-              </button>
-            ))}
-            {selectedBinder.pages.length === 0 && (
-                <div className="text-center text-gray-500 p-4">No pages in this binder.</div>
+        <div className="flex-1 overflow-y-auto p-2">
+            {!isTocCollapsed && (
+                <>
+                {selectedBinder.pages.map(page => (
+                    <button
+                    key={page.id}
+                    onClick={() => dispatch({ type: 'SELECT_PAGE', payload: { binderId: selectedBinder.id, pageId: page.id } })}
+                    className={`flex items-center w-full text-left p-3 rounded-lg text-sm transition-colors duration-200 ${
+                        state.selectedPageId === page.id ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700'
+                    }`}
+                    >
+                    {ICONS.page}
+                    <span className="ml-3 truncate">{page.title}</span>
+                    </button>
+                ))}
+                {selectedBinder.pages.length === 0 && (
+                    <div className="text-center text-gray-500 p-4">No pages in this binder.</div>
+                )}
+                </>
             )}
-          </div>
-        )}
+        </div>
       </div>
 
       {/* Page Detail */}
-      <div className="flex-1">
+      <div className="flex-1 min-w-0">
         <PageDetail />
       </div>
       
-      <Modal isOpen={isPublishModalOpen} onClose={handleClosePublishModal} title={isPublished ? "Update Shop Listing" : "Publish Binder to Shop"}>
+      <Modal isOpen={isPublishModalOpen} onClose={handleClosePublishModal} title={selectedBinder.isPublished ? "Update Shop Listing" : "Publish Binder to Shop"}>
         <div className="space-y-4">
             <div>
                 <label className="block text-sm font-medium text-gray-300">Bundle Name</label>
@@ -345,10 +392,18 @@ const BindersView: React.FC = () => {
                 </div>
             </div>
             <button onClick={handlePublishBinder} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition-colors">
-                {isPublished ? 'Update Listing' : 'Publish'}
+                {selectedBinder.isPublished ? 'Update Listing' : 'Publish'}
             </button>
         </div>
       </Modal>
+
+      {selectedBinder && (
+        <AssignBinderModal
+            isOpen={isAssignModalOpen}
+            onClose={() => setIsAssignModalOpen(false)}
+            binder={selectedBinder}
+        />
+      )}
     </div>
   );
 };

@@ -1,15 +1,18 @@
 
+
 import React, { createContext, useReducer, useContext, ReactNode, useEffect } from 'react';
-import { AppState, AppAction, View, Binder, Bundle, ReminderFrequency, NotificationStyle, User } from '../types';
-import { MOCK_USER, MOCK_DEVICES, MOCK_BINDERS, BINDER_BUNDLES } from '../constants';
+import { AppState, AppAction, View, Binder, Bundle, ReminderFrequency, NotificationStyle, User, UserRole, SubscriptionPlan } from '../types';
+import { MOCK_USER, MOCK_DEVICES, MOCK_BINDERS, BINDER_BUNDLES, MOCK_SUBSCRIPTION_PLANS, MOCK_CORPORATE_USERS, MOCK_BOB_BINDER } from '../constants';
 import { v4 as uuidv4 } from 'uuid';
 
 const initialState: AppState = {
   user: null,
+  users: [],
   isAuthenticated: false,
   devices: MOCK_DEVICES,
   binders: [],
   bundles: BINDER_BUNDLES,
+  subscriptionPlans: MOCK_SUBSCRIPTION_PLANS,
   purchasedBundles: [],
   currentView: View.DASHBOARD,
   selectedBinderId: null,
@@ -17,6 +20,10 @@ const initialState: AppState = {
   isNewPageModalOpen: false,
   notificationStyle: NotificationStyle.STANDARD,
   activeNotification: null,
+  isSidebarCollapsed: false,
+  pushSubscription: null,
+  simulatedRole: null,
+  originalBinders: null,
 };
 
 const AppContext = createContext<{
@@ -44,6 +51,7 @@ const syncBinderToBundles = (binder: Binder, bundles: Bundle[]): Bundle[] => {
     const newBundles = [...bundles];
     newBundles[bundleIndex] = {
         ...newBundles[bundleIndex],
+        ownerId: binder.ownerId,
         name: binder.name,
         description: binder.description,
         price: binder.price ?? 0,
@@ -57,22 +65,72 @@ const syncBinderToBundles = (binder: Binder, bundles: Bundle[]): Bundle[] => {
 
 const appReducer = (state: AppState, action: AppAction): AppState => {
   switch (action.type) {
-    case 'LOGIN_SUCCESS':
-      const { user, binders } = action.payload;
+    case 'LOGIN_SUCCESS': {
+      const { user, binders: initialBinders } = action.payload;
+      let finalBinders = [...initialBinders];
+      const allUsers: User[] = JSON.parse(localStorage.getItem('users') || '[]');
+
+      // If corporate user, load the admin's binders that have been assigned to them.
+      if (user.role === UserRole.CORPORATE_USER && user.corporateId) {
+        const admin = allUsers.find(u => u.corporateId === user.corporateId && u.role === UserRole.CORPORATE_ADMIN);
+        if (admin) {
+          const adminBindersStr = localStorage.getItem(`binders_${admin.id}`);
+          const adminBinders: Binder[] = adminBindersStr ? JSON.parse(adminBindersStr) : [];
+          
+          // Filter admin binders to only include those assigned to the current user.
+          const assignedBinders = adminBinders.filter(b => b.assignedUsers?.includes(user.id));
+          
+          // Prevent duplicates by checking IDs
+          const userBinderIds = new Set(finalBinders.map(b => b.id));
+          const sharedBinders = assignedBinders.filter(b => !userBinderIds.has(b.id));
+          
+          finalBinders.push(...sharedBinders);
+        }
+      }
+
+      // If owner, ensure all published bundles are visible as binders.
+      if (user.role === UserRole.OWNER) {
+          const allKnownBundles = state.bundles;
+          const ownerBinderBundleIds = new Set(finalBinders.map(b => b.bundleId).filter(Boolean));
+
+          allKnownBundles.forEach(bundle => {
+              if (!ownerBinderBundleIds.has(bundle.bundleId)) {
+                  const binderFromBundle: Binder = {
+                      id: `binder-${bundle.bundleId}`,
+                      ownerId: bundle.ownerId,
+                      name: bundle.name,
+                      description: bundle.description,
+                      pages: bundle.presetPages.map((p, index) => ({ id: `page-${bundle.bundleId}-${index}`, ...p })),
+                      bundleId: bundle.bundleId,
+                      isPublished: true,
+                      price: bundle.price,
+                      imageUrl: bundle.imageUrl,
+                      stripePriceId: bundle.stripePriceId,
+                  };
+                  finalBinders.push(binderFromBundle);
+              }
+          });
+      }
+
       return {
         ...state,
         isAuthenticated: true,
         user,
-        binders,
-        selectedBinderId: binders.length > 0 ? binders[0].id : null,
-        selectedPageId: binders.length > 0 && binders[0].pages.length > 0 ? binders[0].pages[0].id : null,
+        users: allUsers, // Make sure users list is fresh on login
+        binders: finalBinders,
+        selectedBinderId: finalBinders.length > 0 ? finalBinders[0].id : null,
+        selectedPageId: finalBinders.length > 0 && finalBinders[0].pages.length > 0 ? finalBinders[0].pages[0].id : null,
+        simulatedRole: null,
       };
+    }
     case 'LOGOUT':
       localStorage.removeItem('loggedInUser');
       return {
           ...initialState,
-          // Keep bundles loaded even when logged out
+          // Keep static data loaded
+          users: state.users,
           bundles: state.bundles,
+          subscriptionPlans: state.subscriptionPlans,
       };
     case 'UPDATE_PASSWORD':
       if (!state.user) return state;
@@ -103,16 +161,41 @@ const appReducer = (state: AppState, action: AppAction): AppState => {
         selectedBinderId: action.payload.binderId,
         selectedPageId: action.payload.pageId
       };
-    case 'ADD_BINDER':
-      return { ...state, binders: [...state.binders, action.payload] };
+    case 'ADD_BINDER': {
+        const newBinder = action.payload;
+        
+        // Persist to owner's storage
+        const ownerBindersStr = localStorage.getItem(`binders_${newBinder.ownerId}`);
+        const ownerBinders: Binder[] = ownerBindersStr ? JSON.parse(ownerBindersStr) : [];
+        const updatedOwnerBinders = [...ownerBinders, newBinder];
+        localStorage.setItem(`binders_${newBinder.ownerId}`, JSON.stringify(updatedOwnerBinders));
+
+        // Update UI state
+        return { ...state, binders: [...state.binders, newBinder] };
+    }
     case 'UPDATE_BINDER': {
         const updatedBinder = action.payload;
-        const newBinders = state.binders.map(b => b.id === updatedBinder.id ? updatedBinder : b);
-    
+
+        // Persist change to owner's storage
+        const ownerBindersStr = localStorage.getItem(`binders_${updatedBinder.ownerId}`);
+        const ownerBinders: Binder[] = ownerBindersStr ? JSON.parse(ownerBindersStr) : [];
+        const binderExistsInOwnerStorage = ownerBinders.some(b => b.id === updatedBinder.id);
+        let updatedOwnerBinders;
+        if(binderExistsInOwnerStorage) {
+            updatedOwnerBinders = ownerBinders.map(b => b.id === updatedBinder.id ? updatedBinder : b);
+        } else {
+            updatedOwnerBinders = [...ownerBinders, updatedBinder];
+        }
+        localStorage.setItem(`binders_${updatedBinder.ownerId}`, JSON.stringify(updatedOwnerBinders));
+
+        // Update current UI state
+        const newBinders = state.binders.map(b => (b.id === updatedBinder.id ? updatedBinder : b));
+        
         let newBundles = state.bundles;
         if (updatedBinder.isPublished && updatedBinder.bundleId) {
             const bundleFromBinder: Bundle = {
                 bundleId: updatedBinder.bundleId,
+                ownerId: updatedBinder.ownerId,
                 name: updatedBinder.name,
                 description: updatedBinder.description,
                 price: updatedBinder.price || 0,
@@ -134,6 +217,16 @@ const appReducer = (state: AppState, action: AppAction): AppState => {
     }
     case 'DELETE_BINDER': {
       const binderToDelete = state.binders.find(b => b.id === action.payload);
+      if (!binderToDelete) return state;
+
+      // Persist change to owner's storage
+      const ownerBindersStr = localStorage.getItem(`binders_${binderToDelete.ownerId}`);
+      if(ownerBindersStr) {
+          const ownerBinders: Binder[] = JSON.parse(ownerBindersStr);
+          const updatedOwnerBinders = ownerBinders.filter(b => b.id !== action.payload);
+          localStorage.setItem(`binders_${binderToDelete.ownerId}`, JSON.stringify(updatedOwnerBinders));
+      }
+      
       const remainingBinders = state.binders.filter(b => b.id !== action.payload);
       
       let newBundles = state.bundles;
@@ -152,44 +245,52 @@ const appReducer = (state: AppState, action: AppAction): AppState => {
       };
     }
     case 'UPDATE_PAGE': {
-        let updatedBinder: Binder | undefined;
-        const newBinders = state.binders.map(binder => {
-            if (binder.id === action.payload.binderId) {
-                updatedBinder = {
-                    ...binder,
-                    pages: binder.pages.map(p => p.id === action.payload.page.id ? action.payload.page : p)
-                };
-                return updatedBinder;
-            }
-            return binder;
-        });
+        const binderToUpdate = state.binders.find(b => b.id === action.payload.binderId);
+        if (!binderToUpdate) return state;
 
-        if (!updatedBinder) return state;
+        const updatedBinder = {
+            ...binderToUpdate,
+            pages: binderToUpdate.pages.map(p => p.id === action.payload.page.id ? action.payload.page : p)
+        };
+
+        // Persist change to owner's storage
+        const ownerBindersStr = localStorage.getItem(`binders_${updatedBinder.ownerId}`);
+        if(ownerBindersStr) {
+            const ownerBinders: Binder[] = JSON.parse(ownerBindersStr);
+            const updatedOwnerBinders = ownerBinders.map(b => b.id === updatedBinder.id ? updatedBinder : b);
+            localStorage.setItem(`binders_${updatedBinder.ownerId}`, JSON.stringify(updatedOwnerBinders));
+        }
+
+        // Update UI state
+        const newBindersForState = state.binders.map(b => b.id === updatedBinder.id ? updatedBinder : b);
         const newBundles = syncBinderToBundles(updatedBinder, state.bundles);
-        return { ...state, binders: newBinders, bundles: newBundles };
+        return { ...state, binders: newBindersForState, bundles: newBundles };
     }
     case 'ADD_PAGE': {
         const { binderId, page } = action.payload;
-        let updatedBinder: Binder | undefined;
+        const binderToUpdate = state.binders.find(b => b.id === binderId);
+        if (!binderToUpdate) return state;
+
         const pageWithDefaultReminder = {
             ...page,
             reminder: page.reminder || { title: '', frequency: ReminderFrequency.NONE, isActive: false }
         };
-        const newBinders = state.binders.map(binder => {
-            if (binder.id === binderId) {
-                updatedBinder = { ...binder, pages: [...binder.pages, pageWithDefaultReminder] };
-                return updatedBinder;
-            }
-            return binder;
-        });
-    
-        if (!updatedBinder) return state;
+
+        const updatedBinder = { ...binderToUpdate, pages: [...binderToUpdate.pages, pageWithDefaultReminder] };
+
+        // Persist change to owner's storage
+        const ownerBindersStr = localStorage.getItem(`binders_${updatedBinder.ownerId}`);
+        if(ownerBindersStr) {
+            const ownerBinders: Binder[] = JSON.parse(ownerBindersStr);
+            const updatedOwnerBinders = ownerBinders.map(b => b.id === updatedBinder.id ? updatedBinder : b);
+            localStorage.setItem(`binders_${updatedBinder.ownerId}`, JSON.stringify(updatedOwnerBinders));
+        }
         
         const newBundles = syncBinderToBundles(updatedBinder, state.bundles);
         
         return {
             ...state,
-            binders: newBinders,
+            binders: state.binders.map(b => b.id === updatedBinder.id ? updatedBinder : b),
             bundles: newBundles,
             selectedPageId: page.id,
         };
@@ -197,26 +298,34 @@ const appReducer = (state: AppState, action: AppAction): AppState => {
     case 'DELETE_PAGE': {
         const { binderId, pageId } = action.payload;
         let newSelectedPageId = state.selectedPageId;
-        let updatedBinder: Binder | undefined;
-        const newBinders = state.binders.map(binder => {
-            if (binder.id === binderId) {
-                const pageIndex = binder.pages.findIndex(p => p.id === pageId);
-                if (pageIndex === -1) return binder;
+        
+        const binderToUpdate = state.binders.find(b => b.id === binderId);
+        if (!binderToUpdate) return state;
 
-                const newPages = binder.pages.filter(p => p.id !== pageId);
-                if (state.selectedPageId === pageId) {
-                    newSelectedPageId = newPages[pageIndex]?.id || newPages[pageIndex - 1]?.id || newPages[0]?.id || null;
-                }
-                updatedBinder = { ...binder, pages: newPages };
-                return updatedBinder;
-            }
-            return binder;
-        });
+        const pageIndex = binderToUpdate.pages.findIndex(p => p.id === pageId);
+        if (pageIndex === -1) return state;
 
-        if (!updatedBinder) return { ...state, binders: newBinders, selectedPageId: newSelectedPageId };
-    
+        const newPages = binderToUpdate.pages.filter(p => p.id !== pageId);
+        if (state.selectedPageId === pageId) {
+            newSelectedPageId = newPages[pageIndex]?.id || newPages[pageIndex - 1]?.id || newPages[0]?.id || null;
+        }
+        const updatedBinder = { ...binderToUpdate, pages: newPages };
+
+        // Persist change to owner's storage
+        const ownerBindersStr = localStorage.getItem(`binders_${updatedBinder.ownerId}`);
+        if(ownerBindersStr) {
+            const ownerBinders: Binder[] = JSON.parse(ownerBindersStr);
+            const updatedOwnerBinders = ownerBinders.map(b => b.id === updatedBinder.id ? updatedBinder : b);
+            localStorage.setItem(`binders_${updatedBinder.ownerId}`, JSON.stringify(updatedOwnerBinders));
+        }
+
         const newBundles = syncBinderToBundles(updatedBinder, state.bundles);
-        return { ...state, binders: newBinders, bundles: newBundles, selectedPageId: newSelectedPageId };
+        return { 
+            ...state, 
+            binders: state.binders.map(b => b.id === updatedBinder.id ? updatedBinder : b), 
+            bundles: newBundles, 
+            selectedPageId: newSelectedPageId 
+        };
     }
     case 'PURCHASE_BUNDLE':
       return { ...state, purchasedBundles: [...state.purchasedBundles, action.payload] };
@@ -224,12 +333,54 @@ const appReducer = (state: AppState, action: AppAction): AppState => {
         return { ...state, bundles: [...state.bundles, action.payload] };
     case 'SET_NEW_PAGE_MODAL_OPEN':
         return { ...state, isNewPageModalOpen: action.payload };
-    case 'SET_USER_ROLE':
-        if (!state.user) return state;
-        return {
-            ...state,
-            user: { ...state.user, role: action.payload }
-        };
+    case 'SET_SIMULATED_ROLE': {
+        const newSimulatedRole = action.payload;
+        const wasSimulating = !!state.simulatedRole;
+        const isNowSimulating = !!newSimulatedRole;
+
+        if (state.user?.role !== UserRole.OWNER) {
+            return state; // This action is only for the owner
+        }
+
+        // Case 1: STARTING simulation (from Owner view to any simulated role)
+        if (!wasSimulating && isNowSimulating) {
+            return {
+                ...state,
+                simulatedRole: newSimulatedRole,
+                originalBinders: state.binders, // Save the owner's binders
+                binders: [], // A new simulated user has no binders
+                selectedBinderId: null,
+                selectedPageId: null,
+            };
+        } 
+        
+        // Case 2: ENDING simulation (from any simulated role back to Owner view)
+        else if (wasSimulating && !isNowSimulating) {
+            const restoredBinders = state.originalBinders || [];
+            return {
+                ...state,
+                simulatedRole: null,
+                binders: restoredBinders,
+                originalBinders: null, // Clear the saved state
+                selectedBinderId: restoredBinders[0]?.id || null,
+                selectedPageId: restoredBinders[0]?.pages[0]?.id || null,
+            };
+        }
+
+        // Case 3: SWITCHING between simulation roles (e.g., VIP -> Free)
+        else if (wasSimulating && isNowSimulating) {
+             return {
+                ...state,
+                simulatedRole: newSimulatedRole,
+                binders: [], // WIPE binders for the new simulation
+                selectedBinderId: null,
+                selectedPageId: null,
+                // originalBinders remains the same, no change needed
+             };
+        }
+
+        return state; // No change (e.g., owner -> owner or other edge cases)
+    }
     case 'SET_NOTIFICATION_STYLE':
         return { ...state, notificationStyle: action.payload };
     case 'TRIGGER_NOTIFICATION':
@@ -265,6 +416,134 @@ const appReducer = (state: AppState, action: AppAction): AppState => {
 
         return { ...state, binders: newBinders, activeNotification: null };
     }
+    case 'TOGGLE_SIDEBAR':
+        return { ...state, isSidebarCollapsed: !state.isSidebarCollapsed };
+    case 'SET_PUSH_SUBSCRIPTION':
+        return { ...state, pushSubscription: action.payload };
+    case 'UPDATE_SUBSCRIPTION_PLAN': {
+        const updatedPlan = action.payload;
+        return {
+            ...state,
+            subscriptionPlans: state.subscriptionPlans.map(plan => 
+                plan.id === updatedPlan.id ? updatedPlan : plan
+            ),
+        };
+    }
+    case 'SET_USERS': {
+        return { ...state, users: action.payload };
+    }
+    case 'DELETE_USER': {
+        const { user, users, simulatedRole } = state;
+        const userIdToDelete = action.payload;
+
+        const isRealAdmin = user?.role === UserRole.CORPORATE_ADMIN && !simulatedRole;
+        const isSimulatingAdmin = user?.role === UserRole.OWNER && simulatedRole === UserRole.CORPORATE_ADMIN;
+
+        if (!isRealAdmin && !isSimulatingAdmin) {
+            console.warn("Unauthorized attempt to delete user: invalid role.");
+            return state;
+        }
+
+        let adminContext = user;
+        if (isSimulatingAdmin) {
+            const mockAdmin = users.find(u => u.role === UserRole.CORPORATE_ADMIN);
+            if (!mockAdmin) return state; // Should not happen if data is seeded
+            adminContext = mockAdmin;
+        }
+
+        const userToDelete = users.find(u => u.id === userIdToDelete);
+
+        if (!userToDelete || userToDelete.corporateId !== adminContext.corporateId || userToDelete.role !== UserRole.CORPORATE_USER) {
+            console.warn("Unauthorized attempt to delete user: mismatch corporateId or role.");
+            return state;
+        }
+
+        const updatedUsers = users.filter(u => u.id !== userIdToDelete);
+        localStorage.setItem('users', JSON.stringify(updatedUsers));
+        localStorage.removeItem(`binders_${userIdToDelete}`);
+
+        return { ...state, users: updatedUsers };
+    }
+    case 'UPGRADE_SUBSCRIPTION': {
+        if (!state.user) return state;
+        const updatedUser: User = { ...state.user, role: action.payload };
+        
+        const updatedUsers = state.users.map(u => u.id === state.user!.id ? updatedUser : u);
+        localStorage.setItem('users', JSON.stringify(updatedUsers));
+        localStorage.setItem('loggedInUser', JSON.stringify(updatedUser));
+        
+        return { ...state, user: updatedUser, users: updatedUsers };
+    }
+    case 'CREATE_CORPORATE_USER': {
+        const { user, users, simulatedRole } = state;
+        const newUserData = action.payload;
+
+        const isRealAdmin = user?.role === UserRole.CORPORATE_ADMIN && !simulatedRole;
+        const isSimulatingAdmin = user?.role === UserRole.OWNER && simulatedRole === UserRole.CORPORATE_ADMIN;
+
+        if (!isRealAdmin && !isSimulatingAdmin) {
+            console.warn("Unauthorized: User without admin privileges attempting to create a corporate user.");
+            return state;
+        }
+
+        let corporateIdForNewUser: string | undefined;
+        if (isRealAdmin) {
+            corporateIdForNewUser = user.corporateId;
+        } else { // isSimulatingAdmin
+            const mockAdmin = users.find(u => u.role === UserRole.CORPORATE_ADMIN);
+            corporateIdForNewUser = mockAdmin?.corporateId;
+        }
+
+        if (!corporateIdForNewUser) {
+            console.error("Critical error: Could not determine a corporateId for the new user.");
+            return state;
+        }
+
+        if (users.some(u => u.email === newUserData.email)) {
+            alert("Error: A user with this email already exists.");
+            return state;
+        }
+
+        const newUser: User = {
+            id: uuidv4(),
+            ...newUserData,
+            role: UserRole.CORPORATE_USER,
+            corporateId: corporateIdForNewUser,
+        };
+        
+        const updatedUsers = [...users, newUser];
+        localStorage.setItem('users', JSON.stringify(updatedUsers));
+        // A new corporate user starts with an empty set of their own binders.
+        // They will see assigned binders on login via the LOGIN_SUCCESS action.
+        localStorage.setItem(`binders_${newUser.id}`, JSON.stringify([]));
+        
+        return { ...state, users: updatedUsers };
+    }
+    case 'ASSIGN_BINDER': {
+        const { binderId, userIds } = action.payload;
+        const binderToUpdate = state.binders.find(b => b.id === binderId);
+
+        if (!binderToUpdate || !state.user) {
+            return state;
+        }
+
+        const updatedBinder: Binder = {
+            ...binderToUpdate,
+            assignedUsers: userIds,
+        };
+
+        // Persist change to owner's storage (the admin's storage)
+        const ownerBindersStr = localStorage.getItem(`binders_${updatedBinder.ownerId}`);
+        if(ownerBindersStr) {
+            const ownerBinders: Binder[] = JSON.parse(ownerBindersStr);
+            const updatedOwnerBinders = ownerBinders.map(b => b.id === updatedBinder.id ? updatedBinder : b);
+            localStorage.setItem(`binders_${updatedBinder.ownerId}`, JSON.stringify(updatedOwnerBinders));
+        }
+
+        // Update UI state
+        const newBindersForState = state.binders.map(b => b.id === updatedBinder.id ? updatedBinder : b);
+        return { ...state, binders: newBindersForState };
+    }
     default:
       return state;
   }
@@ -276,11 +555,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Effect to initialize state from localStorage
   useEffect(() => {
       // Seed users DB if it doesn't exist
-      const usersExist = localStorage.getItem('users');
-      if (!usersExist) {
-          localStorage.setItem('users', JSON.stringify([MOCK_USER]));
+      let allUsers: User[];
+      const usersStr = localStorage.getItem('users');
+      if (!usersStr) {
+          allUsers = [MOCK_USER, ...MOCK_CORPORATE_USERS];
+          localStorage.setItem('users', JSON.stringify(allUsers));
           localStorage.setItem(`binders_${MOCK_USER.id}`, JSON.stringify(MOCK_BINDERS));
+          // Seed mock data for corporate users
+          localStorage.setItem(`binders_${MOCK_CORPORATE_USERS[0].id}`, JSON.stringify([MOCK_BOB_BINDER])); // Admin has one binder
+          localStorage.setItem(`binders_${MOCK_CORPORATE_USERS[1].id}`, JSON.stringify([])); // Bob has none initially
+          localStorage.setItem(`binders_${MOCK_CORPORATE_USERS[2].id}`, JSON.stringify([])); // Sally has none
+      } else {
+          allUsers = JSON.parse(usersStr);
       }
+      dispatch({ type: 'SET_USERS', payload: allUsers });
 
       // Check for a logged-in user session
       const loggedInUserStr = localStorage.getItem('loggedInUser');
@@ -296,13 +584,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           }
       }
   }, []);
-
-  // Effect to save state changes to localStorage
-  useEffect(() => {
-      if (state.isAuthenticated && state.user) {
-          localStorage.setItem(`binders_${state.user.id}`, JSON.stringify(state.binders));
-      }
-  }, [state.binders, state.isAuthenticated, state.user]);
 
   return (
     <AppContext.Provider value={{ state, dispatch }}>

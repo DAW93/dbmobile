@@ -1,5 +1,6 @@
 
 
+
 import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../hooks/useAppContext';
 import { View, Binder, Page, ReminderFrequency } from '../types';
@@ -8,7 +9,7 @@ import Modal from './shared/Modal';
 
 const NewPageModal: React.FC = () => {
     const { state, dispatch } = useAppContext();
-    const { isNewPageModalOpen, binders } = state;
+    const { isNewPageModalOpen, binders, user } = state;
 
     const [pageTitle, setPageTitle] = useState('');
     const [saveOption, setSaveOption] = useState('existing'); // 'existing' or 'new'
@@ -31,6 +32,8 @@ const NewPageModal: React.FC = () => {
     };
 
     const handleSubmit = () => {
+        if (!user) return; // Should not happen if modal is open
+
         const newPageSkeleton: Omit<Page, 'id'> = {
             title: pageTitle,
             notes: '',
@@ -48,6 +51,7 @@ const NewPageModal: React.FC = () => {
             const binderId = uuidv4();
             const newBinder: Binder = {
                 id: binderId,
+                ownerId: user.id,
                 name: newBinderName,
                 description: '',
                 pages: [{ ...newPageSkeleton, id: pageId }]

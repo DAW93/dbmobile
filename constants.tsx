@@ -1,7 +1,8 @@
 
+
 import React from 'react';
-import { User, Device, Bundle, Binder, Page, Task, FileRef, Reminder, TaskStatus, ReminderFrequency, FileCategory } from './types';
-import { LayoutDashboard, BookCopy, ShoppingCart, Settings, FileText, Plus, Trash2, Shield, Lock, X, Check, Copy, UploadCloud, FilePlus2, Users, FileUp, FileVideo, FileAudio, FileImage, Mic, Square, CreditCard } from 'lucide-react';
+import { User, Device, Bundle, Binder, Page, Task, FileRef, Reminder, TaskStatus, ReminderFrequency, FileCategory, UserRole, SubscriptionPlan } from './types';
+import { LayoutDashboard, BookCopy, ShoppingCart, Settings, FileText, Plus, Trash2, Shield, Lock, X, Check, Copy, UploadCloud, FilePlus2, Users, FileUp, FileVideo, FileAudio, FileImage, Mic, Square, CreditCard, ChevronLeft, ChevronRight, UsersRound, UserPlus } from 'lucide-react';
 
 export const ICONS = {
     dashboard: <LayoutDashboard size={20} />,
@@ -19,6 +20,8 @@ export const ICONS = {
     copy: <Copy size={16} />,
     upload: <UploadCloud size={16} />,
     userSwitch: <Users size={16} />,
+    manageUsers: <UsersRound size={20} />,
+    userPlus: <UserPlus size={16} />,
     fileUpload: <FileUp size={16} />,
     video: <FileVideo size={64} className="text-purple-400" />,
     audio: <FileAudio size={64} className="text-pink-400" />,
@@ -27,6 +30,8 @@ export const ICONS = {
     mic: <Mic size={16} />,
     stop: <Square size={16} />,
     creditCard: <CreditCard size={20} />,
+    collapse: <ChevronLeft size={20} />,
+    expand: <ChevronRight size={20} />,
 };
 
 export const MOCK_USER: User = {
@@ -34,13 +39,63 @@ export const MOCK_USER: User = {
   name: 'Alex Doe',
   email: 'alex.doe@example.com',
   password: 'password123',
-  role: 'owner',
+  role: UserRole.OWNER,
 };
+
+export const MOCK_CORPORATE_USERS: User[] = [
+    {
+        id: 'user-corp-admin-acme',
+        name: 'Catherine Admin',
+        email: 'c.admin@acme.corp',
+        password: 'password123',
+        role: UserRole.CORPORATE_ADMIN,
+        corporateId: 'corp-acme-inc',
+    },
+    {
+        id: 'user-corp-user-bob',
+        name: 'Bob Builder',
+        email: 'bob.b@acme.corp',
+        password: 'password123',
+        role: UserRole.CORPORATE_USER,
+        corporateId: 'corp-acme-inc',
+    },
+    {
+        id: 'user-corp-user-sally',
+        name: 'Sally Seashells',
+        email: 'sally.s@acme.corp',
+        password: 'password123',
+        role: UserRole.CORPORATE_USER,
+        corporateId: 'corp-acme-inc',
+    }
+];
 
 export const MOCK_DEVICES: Device[] = [
   { id: 'dev-1', name: 'iPhone 15 Pro', platform: 'iOS', registeredAt: '2023-10-26T10:00:00Z', lastSeen: '2024-07-30T12:00:00Z' },
   { id: 'dev-2', name: 'YubiKey 5C NFC', platform: 'Hardware', registeredAt: '2023-10-26T10:05:00Z', lastSeen: '2024-07-29T09:00:00Z' },
   { id: 'dev-3', name: 'Pixel 8 Pro', platform: 'Android', registeredAt: '2024-01-15T14:00:00Z', lastSeen: '2024-05-20T18:00:00Z', revoked: true },
+];
+
+export const MOCK_SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
+    {
+        id: UserRole.VIP,
+        name: 'VIP',
+        description: 'For power users who want to publish content and use advanced features.',
+        price: 19.99,
+        priceYearly: 199.99,
+        features: ['Publish & Sell Binders', 'Advanced AI Assistant', 'VIP Support', 'Unlimited Private Binders'],
+        stripePriceId: 'price_vip_subscription_monthly_placeholder',
+        stripePriceIdYearly: 'price_vip_subscription_yearly_placeholder',
+    },
+    {
+        id: UserRole.CORPORATE_ADMIN,
+        name: 'Corporate',
+        description: 'For teams and organizations requiring collaboration and administration.',
+        price: 49.99,
+        priceYearly: 499.99,
+        features: ['All VIP Features', 'User Management', 'Team Collaboration', 'Centralized Billing'],
+        stripePriceId: 'price_corporate_subscription_monthly_placeholder',
+        stripePriceIdYearly: 'price_corporate_subscription_yearly_placeholder',
+    },
 ];
 
 export const MOCK_REMINDER: Reminder = { title: '', frequency: ReminderFrequency.NONE, isActive: false };
@@ -74,6 +129,7 @@ export const MOCK_PAGE_2: Page = {
 export const BINDER_BUNDLES: Bundle[] = [
     {
         bundleId: 'bundle-starter-pack',
+        ownerId: MOCK_USER.id,
         name: 'Productivity Starter Pack',
         description: 'A collection of essential templates for managing projects and personal tasks.',
         price: 9.99,
@@ -111,6 +167,7 @@ export const BINDER_BUNDLES: Bundle[] = [
     },
     {
         bundleId: 'bundle-finance-kit',
+        ownerId: MOCK_USER.id,
         name: 'Personal Finance Kit',
         description: 'Track your income, expenses, and investments with these easy-to-use templates.',
         price: 14.99,
@@ -139,6 +196,7 @@ export const BINDER_BUNDLES: Bundle[] = [
 
 const publishedBindersFromBundles: Binder[] = BINDER_BUNDLES.map(bundle => ({
     id: `binder-${bundle.bundleId}`,
+    ownerId: bundle.ownerId,
     name: bundle.name,
     description: bundle.description,
     pages: bundle.presetPages.map((p, index) => ({
@@ -152,15 +210,35 @@ const publishedBindersFromBundles: Binder[] = BINDER_BUNDLES.map(bundle => ({
     stripePriceId: bundle.stripePriceId,
 }));
 
+export const MOCK_BOB_BINDER: Binder = {
+    id: 'binder-bob-1',
+    ownerId: 'user-corp-user-bob',
+    name: 'ACME Corp Onboarding',
+    description: 'Tasks and docs for new hires at ACME Inc.',
+    pages: [{
+        id: 'page-bob-1',
+        title: 'First Week Checklist',
+        notes: 'Complete all items by Friday.',
+        files: [],
+        tasks: [
+            { id: 'task-bob-1', text: 'Sign NDA', status: TaskStatus.INCOMPLETE },
+            { id: 'task-bob-2', text: 'Setup development environment', status: TaskStatus.INCOMPLETE },
+        ],
+        reminder: { title: 'Submit paperwork', frequency: ReminderFrequency.ONE_TIME, dateTime: '2024-08-10T17:00', isActive: false }
+    }],
+};
+
 export const MOCK_BINDERS: Binder[] = [
   {
     id: 'binder-1',
+    ownerId: MOCK_USER.id,
     name: 'Work Projects',
     description: 'All active and upcoming work projects.',
     pages: [MOCK_PAGE_1, MOCK_PAGE_2],
   },
   {
     id: 'binder-2',
+    ownerId: MOCK_USER.id,
     name: 'Personal Finance',
     description: 'Budgets, investments, and financial planning.',
     pages: [{
